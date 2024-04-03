@@ -39,12 +39,13 @@ func suggestUpdateCmd(serviceImages map[string]string) string {
 	return cmd
 }
 
-func Run(ctx context.Context, fsys afero.Fs, excludedContainers []string, ignoreHealthCheck bool) error {
+func Run(ctx context.Context, fsys afero.Fs, excluded map[string]bool, ignoreHealthCheck bool) error {
 	// Sanity checks.
 	{
 		if err := utils.LoadConfigFS(fsys); err != nil {
 			return err
 		}
+		// TODO: check exclude list
 		if err := utils.AssertSupabaseDbIsRunning(); err == nil {
 			fmt.Fprintln(os.Stderr, utils.Aqua("supabase start")+" is already running.")
 			utils.CmdSuggestion = fmt.Sprintf("Run %s to show status of local Supabase containers.", utils.Aqua("supabase status"))
@@ -77,7 +78,7 @@ func Run(ctx context.Context, fsys afero.Fs, excludedContainers []string, ignore
 			Password: utils.Config.Db.Password,
 			Database: "postgres",
 		}
-		return run(p, ctx, fsys, excludedContainers, dbConfig)
+		return run(p, ctx, fsys, excluded, dbConfig)
 	}); err != nil {
 		if ignoreHealthCheck && errors.Is(err, reset.ErrUnhealthy) {
 			fmt.Fprintln(os.Stderr, err)
@@ -90,6 +91,12 @@ func Run(ctx context.Context, fsys afero.Fs, excludedContainers []string, ignore
 	}
 
 	fmt.Fprintf(os.Stderr, "Started %s local development setup.\n\n", utils.Aqua("supabase"))
+	var excludedContainers []string
+	for service, stopped := range excluded {
+		if !stopped {
+			excludedContainers = append(excludedContainers, service)
+		}
+	}
 	status.PrettyPrint(os.Stdout, excludedContainers...)
 	return nil
 }
@@ -136,12 +143,7 @@ var (
 	vectorConfigTemplate = template.Must(template.New("vectorConfig").Parse(vectorConfigEmbed))
 )
 
-func run(p utils.Program, ctx context.Context, fsys afero.Fs, excludedContainers []string, dbConfig pgconn.Config, options ...func(*pgx.ConnConfig)) error {
-	excluded := make(map[string]bool)
-	for _, name := range excludedContainers {
-		excluded[name] = true
-	}
-
+func run(p utils.Program, ctx context.Context, fsys afero.Fs, excluded map[string]bool, dbConfig pgconn.Config, options ...func(*pgx.ConnConfig)) error {
 	// Start vector
 	if utils.Config.Analytics.Enabled && !isContainerExcluded(utils.VectorImage, excluded) {
 		var vectorConfigBuf bytes.Buffer
@@ -932,7 +934,7 @@ func isContainerExcluded(imageName string, excluded map[string]bool) bool {
 }
 
 func ExcludableContainers() []string {
-	names := []string{}
+	names := []string{"db"}
 	for _, image := range utils.ServiceImages {
 		names = append(names, utils.ShortContainerImageName(image))
 	}
